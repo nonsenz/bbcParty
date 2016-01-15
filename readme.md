@@ -9,3 +9,4 @@ tries to play random tracks from given bbc radio shows on youtube by scraping th
 - fix api
 - use [jsonapi](http://jsonapi.org/) for the json responses
 - use goroutines for scrape requests
+- add tests ;-)
