@@ -3,58 +3,70 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/BurntSushi/toml"
 	"github.com/gorilla/mux"
-	"github.com/nonsenz/bbcScraper"
+	"github.com/nonsenz/bbcParty/scraper"
+	"github.com/nonsenz/bbcParty/storer"
+	"github.com/nonsenz/bbcParty/tuber"
+	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
-	"io/ioutil"
-	"io"
 )
 
-const showBucket string = "shows"
-const unprocessedBroadcastBucket string = "unprocessed_broadcasts"
-const broadcastBucket string = "broadcasts"
-const trackBucket string = "tracks"
+const (
+	showBucket                 string = "shows"
+	unprocessedBroadcastBucket string = "unprocessed_broadcasts"
+	broadcastBucket            string = "broadcasts"
+	trackBucket                string = "tracks"
+	trackDelimiter             string = "<:>"
+)
 
-var storer bbcScraper.Storer
+var db storer.Storer
+var config Config
+var tub tuber.Tuber
 
 func main() {
 
-	storer = bbcScraper.Storer(bbcScraper.NewBoltStorer("tracks.db"))
-	defer storer.Close()
+	if _, err := toml.DecodeFile("config.toml", &config); err != nil {
+		log.Fatalf("Error reading config: %v", err)
+	}
+
+	db = storer.NewBoltStorer(config.DbFile)
+	defer db.Close()
+
+	tub = tuber.Tuber{config.GoogleApiKey}
 
 	router := mux.NewRouter().StrictSlash(true)
 	router.HandleFunc("/update", update).Methods("POST")
 	router.HandleFunc("/show", addShow).Methods("POST")
 	router.HandleFunc("/shows", getShows).Methods("GET")
 	router.HandleFunc("/track", getRandomTrack).Methods("GET")
+	router.HandleFunc("/stats", getStats).Methods("GET")
+	router.HandleFunc("/tube", getHit).Methods("GET")
 	log.Fatal(http.ListenAndServe(":8081", router))
-
 }
 
 func update(response http.ResponseWriter, request *http.Request) {
 
-	shows := [...]string{
-		"b01fm4ss", // gilles
-		"b00rwkjd", // freakier zone
-		"b0072l4x", // freakzone
-	}
+	response.Header().Set("Content-Type", "application/json; charset=UTF-8")
 
-	for _, showId := range shows {
-		fmt.Printf("processing:%s\n", showId)
-		processAllPages := storer.Get(showId, showBucket) == ""
-		broadcastIds := bbcScraper.BroadcastIds(showId, processAllPages)
+	for _, showId := range db.All(showBucket) {
+		log.Printf("processing:%s\n", showId)
+		processAllPages := db.Get(showId, showBucket) == ""
+		broadcastIds := scraper.BroadcastIds(showId, processAllPages)
 
 		for _, bid := range broadcastIds {
 			//			fmt.Printf("processing:%s,%s\n", showId, bid)
-			if storer.Get(bid, broadcastBucket) == "" {
-				tracks := bbcScraper.BroadcastTracks(bid)
+			if db.Get(bid, broadcastBucket) == "" {
+				tracks := scraper.BroadcastTracks(bid)
 
 				for _, track := range tracks {
 					trackString := strings.ToLower(track.Artist + ": " + track.Title)
-					if storer.Get(trackString, trackBucket) == "" {
-						if err := storer.Put(trackString, "done", trackBucket); err != nil {
+					if db.Get(trackString, trackBucket) == "" {
+						if err := db.Put(trackString, "done", trackBucket); err != nil {
 							log.Fatal(err)
 						}
 						fmt.Printf("put:%s,%s,%s;\n", showId, bid, trackString)
@@ -64,7 +76,7 @@ func update(response http.ResponseWriter, request *http.Request) {
 				}
 
 				// we processed all tracks in this broadcast so we persist it as done
-				if err := storer.Put(bid, "done", broadcastBucket); err != nil {
+				if err := db.Put(bid, "done", broadcastBucket); err != nil {
 					log.Fatal(err)
 				}
 			}
@@ -73,7 +85,7 @@ func update(response http.ResponseWriter, request *http.Request) {
 		if processAllPages {
 			// we processed all show broadcasts.
 			// now we persist the showId the so we dont have to do an initial full import in the future
-			if err := storer.Put(showId, "done", showBucket); err != nil {
+			if err := db.Put(showId, "done", showBucket); err != nil {
 				log.Fatal(err)
 			}
 		}
@@ -83,9 +95,6 @@ func update(response http.ResponseWriter, request *http.Request) {
 	if err := json.NewEncoder(response).Encode("done"); err != nil {
 		panic(err)
 	}
-
-	response.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	response.WriteHeader(http.StatusOK)
 }
 
 func addShow(response http.ResponseWriter, request *http.Request) {
@@ -93,7 +102,7 @@ func addShow(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Content-Type", "application/json; charset=UTF-8")
 
 	type Show struct {
-		Id  string	`json:"id"`
+		Id string `json:"id"`
 	}
 
 	var show Show
@@ -112,7 +121,7 @@ func addShow(response http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if err := storer.Put(show.Id, "", showBucket); err != nil {
+	if err := db.Put(show.Id, "", showBucket); err != nil {
 		log.Fatal(err)
 	}
 
@@ -127,7 +136,7 @@ func getShows(response http.ResponseWriter, request *http.Request) {
 
 	response.Header().Set("Content-Type", "application/json; charset=UTF-8")
 
-	shows := storer.All(showBucket)
+	shows := db.All(showBucket)
 
 	if err := json.NewEncoder(response).Encode(shows); err != nil {
 		panic(err)
@@ -138,9 +147,33 @@ func getRandomTrack(response http.ResponseWriter, request *http.Request) {
 
 	response.Header().Set("Content-Type", "application/json; charset=UTF-8")
 
-	track := storer.Random(trackBucket)
+	track := db.Random(trackBucket)
 
 	if err := json.NewEncoder(response).Encode(track); err != nil {
 		panic(err)
 	}
+}
+
+func getStats(response http.ResponseWriter, request *http.Request) {
+
+	response.Header().Set("Content-Type", "application/json; charset=UTF-8")
+
+	if err := json.NewEncoder(response).Encode("number of tracks: " + strconv.Itoa(len(db.All(trackBucket)))); err != nil {
+		panic(err)
+	}
+
+}
+
+func getHit(response http.ResponseWriter, request *http.Request) {
+
+	response.Header().Set("Content-Type", "application/json; charset=UTF-8")
+
+	if err := json.NewEncoder(response).Encode(tub.FirstHit(db.Random(trackBucket))); err != nil {
+		panic(err)
+	}
+}
+
+type Config struct {
+	GoogleApiKey string
+	DbFile       string
 }
