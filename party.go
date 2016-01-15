@@ -24,9 +24,12 @@ const (
 	trackDelimiter             string = "<:>"
 )
 
-var db storer.Storer
-var config Config
-var tub tuber.Tuber
+var (
+	db storer.Storer
+	config Config
+	tub tuber.Tuber
+	nextHit string
+)
 
 func main() {
 
@@ -38,6 +41,7 @@ func main() {
 	defer db.Close()
 
 	tub = tuber.Tuber{config.GoogleApiKey}
+	nextHit = getHitHelper()
 
 	router := mux.NewRouter().StrictSlash(true)
 	router.HandleFunc("/update", update).Methods("POST")
@@ -168,9 +172,25 @@ func getHit(response http.ResponseWriter, request *http.Request) {
 
 	response.Header().Set("Content-Type", "application/json; charset=UTF-8")
 
-	if err := json.NewEncoder(response).Encode(tub.FirstHit(db.Random(trackBucket))); err != nil {
+	hit := nextHit
+
+	// get hit for next call async
+	// this way request does not hang until youtube api call is finished
+	go func() {
+		nextHit = getHitHelper()
+	}()
+
+	if err := json.NewEncoder(response).Encode(hit); err != nil {
 		panic(err)
 	}
+}
+
+func getHitHelper() (hit string) {
+	for hit == "" {
+		hit = tub.FirstHit(db.Random(trackBucket))
+	}
+	fmt.Println(hit)
+	return hit
 }
 
 type Config struct {

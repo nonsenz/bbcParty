@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"google.golang.org/api/youtube/v3"
 	"google.golang.org/api/googleapi/transport"
-	"fmt"
 )
 
 type Tuber struct {
@@ -13,8 +12,6 @@ type Tuber struct {
 }
 
 func (t *Tuber) FirstHit(searchTerm string) string {
-
-	fmt.Println(searchTerm)
 
 	client := &http.Client{
 		Transport: &transport.APIKey{Key: t.ApiKey},
@@ -32,11 +29,8 @@ func (t *Tuber) FirstHit(searchTerm string) string {
 		log.Fatalf("Error making search API call: %v", err)
 	}
 
-	fmt.Println(len(response.Items))
-
 	// Iterate through each item and add it to the correct list.
-	for k, item := range response.Items {
-		fmt.Println(k, item.Id.Kind)
+	for _, item := range response.Items {
 		if item.Id.Kind == "youtube#video" {
 			return item.Id.VideoId
 		}
