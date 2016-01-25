@@ -7,6 +7,10 @@ import (
 	"strings"
 )
 
+type Track struct {
+	Artist, Title, Label string
+}
+
 func BroadcastIds(showId string, all bool) []string {
 
 	continueUntilPage := 1
@@ -55,10 +59,6 @@ func BroadcastTracks(broadcastId string) []Track {
 	broadcastDoc.Find(".segment__track").Each(func(i int, s *goquery.Selection) {
 		tracks = append(tracks, Track{s.Find(".artist").Text(), s.Find("p span").Text(), s.Find("ul span").Text()})
 	})
-	//
-	return tracks
-}
 
-type Track struct {
-	Artist, Title, Label string
+	return tracks
 }

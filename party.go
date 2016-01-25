@@ -8,6 +8,7 @@ import (
 	"github.com/nonsenz/bbcParty/scraper"
 	"github.com/nonsenz/bbcParty/storer"
 	"github.com/nonsenz/bbcParty/tuber"
+	"html/template"
 	"io"
 	"io/ioutil"
 	"log"
@@ -24,10 +25,15 @@ const (
 	trackDelimiter             string = "<:>"
 )
 
+type Config struct {
+	GoogleApiKey string
+	DbFile       string
+}
+
 var (
-	db storer.Storer
-	config Config
-	tub tuber.Tuber
+	db      storer.Storer
+	config  Config
+	tub     tuber.Tuber
 	nextHit string
 )
 
@@ -44,12 +50,13 @@ func main() {
 	nextHit = getHitHelper()
 
 	router := mux.NewRouter().StrictSlash(true)
+	router.HandleFunc("/", getIndex).Methods("GET")
 	router.HandleFunc("/update", update).Methods("POST")
 	router.HandleFunc("/show", addShow).Methods("POST")
 	router.HandleFunc("/shows", getShows).Methods("GET")
 	router.HandleFunc("/track", getRandomTrack).Methods("GET")
 	router.HandleFunc("/stats", getStats).Methods("GET")
-	router.HandleFunc("/tube", getHit).Methods("GET")
+	router.HandleFunc("/hit", getHit).Methods("GET")
 	log.Fatal(http.ListenAndServe(":8081", router))
 }
 
@@ -168,6 +175,22 @@ func getStats(response http.ResponseWriter, request *http.Request) {
 
 }
 
+func getIndex(response http.ResponseWriter, request *http.Request) {
+
+	response.Header().Set("Content-Type", "text/html; charset=UTF-8")
+
+	t, _ := template.ParseFiles("templates/index.html")
+	js, _ := ioutil.ReadFile("js/main.js")
+
+	indexData := struct {
+		Js template.JS
+	}{
+		template.JS(js),
+	}
+
+	t.Execute(response, indexData)
+}
+
 func getHit(response http.ResponseWriter, request *http.Request) {
 
 	response.Header().Set("Content-Type", "application/json; charset=UTF-8")
@@ -180,7 +203,11 @@ func getHit(response http.ResponseWriter, request *http.Request) {
 		nextHit = getHitHelper()
 	}()
 
-	if err := json.NewEncoder(response).Encode(hit); err != nil {
+	hitData := struct {
+		Id string `json:"id"`
+	}{hit}
+
+	if err := json.NewEncoder(response).Encode(hitData); err != nil {
 		panic(err)
 	}
 }
@@ -189,11 +216,5 @@ func getHitHelper() (hit string) {
 	for hit == "" {
 		hit = tub.FirstHit(db.Random(trackBucket))
 	}
-	fmt.Println(hit)
 	return hit
-}
-
-type Config struct {
-	GoogleApiKey string
-	DbFile       string
 }
