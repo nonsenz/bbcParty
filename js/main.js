@@ -62,3 +62,11 @@ window.onresize = function(event) {
     bodySize = bbcParty.getBodySize();
     player.setSize(bodySize.x - 20 , bodySize.y - 20);
 };
+
+document.onkeydown = function (e) {
+    e = e || window.event;
+
+    if (e.keyCode == '39') {
+        player.loadVideoById(bbcParty.nextHit());
+    }
+};
