@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"github.com/BurntSushi/toml"
 	"github.com/gorilla/mux"
 	"github.com/nonsenz/bbcParty/scraper"
@@ -30,6 +30,10 @@ type Config struct {
 	DbFile       string
 }
 
+type JsonErrorResponse struct {
+	ErrorMessage string `json:"error"`
+}
+
 var (
 	db      storer.Storer
 	config  Config
@@ -45,6 +49,8 @@ func main() {
 
 	db = storer.NewBoltStorer(config.DbFile)
 	defer db.Close()
+
+	initDb()
 
 	tub = tuber.Tuber{config.GoogleApiKey}
 	nextHit = getHitHelper()
@@ -69,29 +75,19 @@ func update(response http.ResponseWriter, request *http.Request) {
 		processAllPages := db.Get(showId, showBucket) == ""
 		broadcastIds := scraper.BroadcastIds(showId, processAllPages)
 
-		for _, bid := range broadcastIds {
-			//			fmt.Printf("processing:%s,%s\n", showId, bid)
-			if db.Get(bid, broadcastBucket) == "" {
-				tracks := scraper.BroadcastTracks(bid)
+		tasks := make(chan string)
 
-				for _, track := range tracks {
-					trackString := strings.ToLower(track.Artist + ": " + track.Title)
-					if db.Get(trackString, trackBucket) == "" {
-						if err := db.Put(trackString, "done", trackBucket); err != nil {
-							log.Fatal(err)
-						}
-						fmt.Printf("put:%s,%s,%s;\n", showId, bid, trackString)
-					} else {
-						fmt.Printf("skipped:%s,%s,%s;\n", showId, bid, trackString)
-					}
-				}
-
-				// we processed all tracks in this broadcast so we persist it as done
-				if err := db.Put(bid, "done", broadcastBucket); err != nil {
-					log.Fatal(err)
-				}
-			}
+		// lets create 8 workers...
+		for i := 0; i < 8; i++ {
+			go updateBroadcast(tasks)
 		}
+
+		// ...and process the broadcasts in parallel
+		for _, bid := range broadcastIds {
+			tasks <- bid
+		}
+
+		close(tasks)
 
 		if processAllPages {
 			// we processed all show broadcasts.
@@ -100,11 +96,37 @@ func update(response http.ResponseWriter, request *http.Request) {
 				log.Fatal(err)
 			}
 		}
-		fmt.Printf("done with show %s\n", showId)
+		log.Printf("done with show %s\n", showId)
 	}
 
 	if err := json.NewEncoder(response).Encode("done"); err != nil {
 		panic(err)
+	}
+}
+
+func updateBroadcast(tasks <-chan string) {
+	for bid := range tasks {
+		log.Printf("WOOHOO %v",bid)
+		if db.Get(bid, broadcastBucket) == "" {
+			tracks := scraper.BroadcastTracks(bid)
+
+			for _, track := range tracks {
+				trackString := strings.ToLower(track.Artist + ": " + track.Title)
+				if db.Get(trackString, trackBucket) == "" {
+					if err := db.Put(trackString, "done", trackBucket); err != nil {
+						log.Fatal(err)
+					}
+					log.Printf("put:%s,%s;\n", bid, trackString)
+				} else {
+					log.Printf("skipped:%s,%s;\n", bid, trackString)
+				}
+			}
+
+			// we processed all tracks in this broadcast so we persist it as done
+			if err := db.Put(bid, "done", broadcastBucket); err != nil {
+				log.Fatal(err)
+			}
+		}
 	}
 }
 
@@ -125,11 +147,19 @@ func addShow(response http.ResponseWriter, request *http.Request) {
 	if err := request.Body.Close(); err != nil {
 		panic(err)
 	}
-	if err := json.Unmarshal(body, &show); err != nil {
+
+	err = json.Unmarshal(body, &show)
+
+	if err == nil && show.Id == "" {
+		err = errors.New("id missing")
+	}
+
+	if err != nil {
 		response.WriteHeader(422) // unprocessable entity
-		if err := json.NewEncoder(response).Encode(err); err != nil {
+		if err := json.NewEncoder(response).Encode(JsonErrorResponse{err.Error()}); err != nil {
 			panic(err)
 		}
+		return
 	}
 
 	if err := db.Put(show.Id, "", showBucket); err != nil {
@@ -217,4 +247,10 @@ func getHitHelper() (hit string) {
 		hit = tub.FirstHit(db.Random(trackBucket))
 	}
 	return hit
+}
+
+func initDb() {
+	db.CreateBucket(showBucket)
+	db.CreateBucket(trackBucket)
+	db.CreateBucket(broadcastBucket)
 }

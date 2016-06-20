@@ -12,6 +12,7 @@ type Storer interface {
 	Put(key string, value string, bucket string) error
 	All(bucket string) []string
 	Random(bucket string) string
+	CreateBucket(bucket string) error
 	Close()
 }
 
@@ -68,12 +69,14 @@ func (b *BoltStorer) All(bucket string) []string {
 	var keys []string
 	if err := b.db.View(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket([]byte(bucket))
-		// Iterate over items in sorted key order.
-		if err := bucket.ForEach(func(key, value []byte) error {
-			keys = append(keys, string(key))
-			return nil
-		}); err != nil {
-			log.Fatal(err)
+		if(bucket != nil) {
+			// Iterate over items in sorted key order.
+			if err := bucket.ForEach(func(key, value []byte) error {
+				keys = append(keys, string(key))
+				return nil
+			}); err != nil {
+				log.Fatal(err)
+			}
 		}
 		return nil
 	}); err != nil {
@@ -86,5 +89,17 @@ func (b *BoltStorer) All(bucket string) []string {
 func (b *BoltStorer) Random(bucket string) string {
 	rand.Seed(time.Now().UTC().UnixNano())
 	values := b.All(bucket)
+	if (len(values) == 0) {
+		return ""
+	}
 	return values[rand.Intn(len(values))]
+}
+
+func (b *BoltStorer) CreateBucket(bucket string) error {
+	err := b.db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte(bucket))
+		return err
+	});
+
+	return err
 }
